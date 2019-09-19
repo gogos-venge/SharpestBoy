@@ -1,0 +1,105 @@
+﻿using System.IO;
+
+namespace SharpestBoy.Cart {
+    class MBC1 : Mapper {
+
+        bool Register0 = false; //RAM protection
+        byte Register1 = 1; //ROM bank code
+        byte Register2 = 0; //Upper ROM bank code // RAM
+        bool Register3 = false; //ROM/RAM change
+
+        int ROMOffset = 0;
+        int RAMOffset = 0;
+
+        public MBC1(FileStream RomFile, Header Header) : base(RomFile, Header) {
+            Remap();
+        }
+
+        public override bool Read(out byte value, int readAddress) {
+            if (readAddress >= 0xA000 + RAMBankSize) {
+                value = 0xFF;
+                return true;
+            }
+            if (readAddress >= 0xA000) {
+                //Reading data from RAM
+                if (Register0) {
+                    int address = (readAddress & 0x1FFF) | RAMOffset;
+                    value = RAM[address];
+                } else {
+                    value = 0xFF;
+                }
+            }
+            else if (readAddress >= 0x4000) {
+                value = ROM[readAddress + ROMOffset];
+            } else {
+                int Mode1Offset = 0;
+                if (Register3) {
+                    int Bank = Register2 << 5;
+                    if(Bank % 0x20 != 0) {
+                        Bank++;
+                    }
+                    Bank &= (ROMTotalBanks - 1);
+                    Mode1Offset = Bank * ROMBankSize;
+                }
+                value = ROM[readAddress + Mode1Offset];
+            }
+            return true;
+        }
+
+        public override bool Write(byte value, int writeAddress) {
+            if(writeAddress >= 0xA000 + RAMBankSize) {
+                return true;
+            }
+            if(writeAddress >= 0xA000) {
+                //Writing data to RAM
+                if (Register0) {
+                    int address = (writeAddress & 0x1FFF) | RAMOffset;
+                    RAM[address] = value;
+                }
+            } else if(writeAddress >= 0x6000) {
+                //Register 3: ROM/RAM change
+                Register3 = (value & 0x1) == 1;
+
+            } else if(writeAddress >= 0x4000) {
+                //Register 2: Upper ROM bank code when using 8 Mbits or more of ROM (and register 3 is 0)
+                Register2 = (byte)(value & 0x3);
+                Remap();
+
+            } else if (writeAddress >= 0x2000) {
+                //Register 1: ROM bank code
+                value &= 0x1F;
+                Register1 = (byte)(value == 0 ? 1 : value);
+                Remap();
+                
+            } else {
+                //Register 0: RAMCS gate data (serves as write-protection for RAM)
+                Register0 = (value & 0x0F) == 0x0A;
+
+            }
+            
+            return true;
+        }
+
+        private void Remap() {
+            if (Register3) {
+                int Bank = Register2 & (RAMTotalBanks - 1);
+                RAMOffset = Bank << 0xD;
+            }
+            else {
+                RAMOffset = 0;
+            }
+            
+            int BankValue = (Register2 << 5) | Register1;
+
+            int AdjustedRomBank = 0;
+            if (BankValue >= ROMTotalBanks) {
+                AdjustedRomBank = BankValue % ROMTotalBanks;
+            } else {
+                AdjustedRomBank = BankValue & (ROMTotalBanks - 1);
+                AdjustedRomBank = AdjustedRomBank == 0 ? 1 : AdjustedRomBank;
+            }
+            ROMOffset = (AdjustedRomBank - 1) * ROMBankSize;
+        }
+
+    }
+}
